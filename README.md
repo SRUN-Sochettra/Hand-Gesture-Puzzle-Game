@@ -206,7 +206,7 @@ Contributions are welcome! Please review our guidelines:
 
 ## ✍️ Author
 
-Created by **Srun Sochettra**.
+Created by **Srun Sochettra, Tep Mekara & Sar Chanrithy** for final project of a subject in the course.
 
 ---
 
