@@ -1,20 +1,21 @@
-"""MediaPipe wrapper + One Euro Filter for cursor smoothing."""
+"""MediaPipe wrapper + One Euro Filter. Multi-hand aware."""
 
 from __future__ import annotations
 
 import logging
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import cv2
 import mediapipe as mp
 
 from config import (
     CURSOR_BETA, CURSOR_D_CUTOFF, CURSOR_MIN_CUTOFF, INFERENCE_WIDTH,
-    MP_MAX_HANDS, MP_MIN_DETECTION_CONFIDENCE, MP_MIN_TRACKING_CONFIDENCE,
+    MP_MIN_DETECTION_CONFIDENCE, MP_MIN_TRACKING_CONFIDENCE,
     MP_MODEL_COMPLEXITY, PINCH_RATIO_SMOOTHING,
 )
+from gestures import Gesture, classify as classify_gesture
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +37,8 @@ class OneEuroFilter:
     """1€ Filter (Casiez et al. CHI 2012)."""
 
     def __init__(self, min_cutoff: float = CURSOR_MIN_CUTOFF,
-                 beta: float = CURSOR_BETA, d_cutoff: float = CURSOR_D_CUTOFF) -> None:
+                 beta: float = CURSOR_BETA,
+                 d_cutoff: float = CURSOR_D_CUTOFF) -> None:
         self.min_cutoff = min_cutoff
         self.beta = beta
         self.d_cutoff = d_cutoff
@@ -67,71 +69,111 @@ class OneEuroFilter:
 
 
 @dataclass(frozen=True)
+class HandData:
+    handedness: str
+    cursor: tuple[int, int]
+    pinch_ratio: float | None
+    gesture: Gesture
+    raw_landmarks: object
+
+
+@dataclass(frozen=True)
 class HandFrame:
     detected: bool
-    cursor: tuple[int, int] | None = None
-    pinch_ratio: float | None = None
+    hands: tuple = field(default_factory=tuple)
     timestamp: float = 0.0
+
+    @property
+    def primary(self) -> HandData | None:
+        return self.hands[0] if self.hands else None
+
+    @property
+    def cursor(self):
+        return self.primary.cursor if self.primary else None
+
+    @property
+    def pinch_ratio(self):
+        return self.primary.pinch_ratio if self.primary else None
+
+    def by_handedness(self, label: str) -> HandData | None:
+        return next((h for h in self.hands if h.handedness == label), None)
 
 
 class HandTracker:
-    def __init__(self) -> None:
+    def __init__(self, max_hands: int = 1) -> None:
         try:
             self._mp = mp.solutions.hands
             self._mp_draw = mp.solutions.drawing_utils
             self._mp_styles = mp.solutions.drawing_styles
-            self._hands = self._mp.Hands(
-                max_num_hands=MP_MAX_HANDS,
-                model_complexity=MP_MODEL_COMPLEXITY,
-                min_detection_confidence=MP_MIN_DETECTION_CONFIDENCE,
-                min_tracking_confidence=MP_MIN_TRACKING_CONFIDENCE,
-                static_image_mode=False,
-            )
+            self._hands = self._build(max_hands)
         except Exception as exc:
             raise RuntimeError(
                 "Failed to initialize MediaPipe Hands. "
                 "Install with: pip install mediapipe"
             ) from exc
 
-        self._fx = OneEuroFilter()
-        self._fy = OneEuroFilter()
-        self._pinch_ema: float | None = None
+        self._filters: dict[str, tuple[OneEuroFilter, OneEuroFilter]] = {}
+        self._pinch_emas: dict[str, float] = {}
+
+    def _build(self, max_hands: int):
+        return self._mp.Hands(
+            max_num_hands=max_hands,
+            model_complexity=MP_MODEL_COMPLEXITY,
+            min_detection_confidence=MP_MIN_DETECTION_CONFIDENCE,
+            min_tracking_confidence=MP_MIN_TRACKING_CONFIDENCE,
+            static_image_mode=False,
+        )
+
+    def set_max_hands(self, n: int) -> None:
+        if self._hands is not None:
+            self._hands.close()
+        self._hands = self._build(n)
+        self.reset_filter()
 
     def process(self, frame, draw_landmarks: bool = False) -> HandFrame:
         h, w = frame.shape[:2]
         t = time.time()
-
         small = self._downscale(frame, w, h)
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
         result = self._hands.process(rgb)
 
         if not result.multi_hand_landmarks:
-            self._pinch_ema = None
+            self._pinch_emas.clear()
             return HandFrame(detected=False, timestamp=t)
 
-        lms = result.multi_hand_landmarks[0]
-        if draw_landmarks:
-            self._mp_draw.draw_landmarks(
-                frame, lms, self._mp.HAND_CONNECTIONS,
-                self._mp_styles.get_default_hand_landmarks_style(),
-                self._mp_styles.get_default_hand_connections_style(),
-            )
+        hands_out: list[HandData] = []
+        handed = result.multi_handedness or []
+        for i, lms in enumerate(result.multi_hand_landmarks):
+            label = (handed[i].classification[0].label
+                     if i < len(handed) else f"Hand{i}")
+            if draw_landmarks:
+                self._mp_draw.draw_landmarks(
+                    frame, lms, self._mp.HAND_CONNECTIONS,
+                    self._mp_styles.get_default_hand_landmarks_style(),
+                    self._mp_styles.get_default_hand_connections_style(),
+                )
+            cursor = self._cursor_for(label, lms, w, h, t)
+            ratio = self._smoothed_pinch_for(label, self._pinch_ratio(lms))
+            gesture = classify_gesture(lms, ratio)
+            hands_out.append(HandData(
+                handedness=label, cursor=cursor, pinch_ratio=ratio,
+                gesture=gesture, raw_landmarks=lms,
+            ))
 
-        return HandFrame(
-            detected=True,
-            cursor=self._cursor(lms, w, h, t),
-            pinch_ratio=self._smoothed_pinch(self._pinch_ratio(lms)),
-            timestamp=t,
-        )
+        # Right first for stable solo semantics.
+        hands_out.sort(key=lambda hd: 0 if hd.handedness == "Right" else 1)
+        return HandFrame(detected=True, hands=tuple(hands_out), timestamp=t)
 
     def reset_filter(self) -> None:
-        self._fx.reset()
-        self._fy.reset()
-        self._pinch_ema = None
+        for fx, fy in self._filters.values():
+            fx.reset()
+            fy.reset()
+        self._pinch_emas.clear()
 
     def close(self) -> None:
-        self._hands.close()
+        if self._hands is not None:
+            self._hands.close()
 
     # ---- internals ----
     @staticmethod
@@ -139,14 +181,16 @@ class HandTracker:
         if w <= INFERENCE_WIDTH:
             return frame
         new_h = int(h * (INFERENCE_WIDTH / w))
-        return cv2.resize(frame, (INFERENCE_WIDTH, new_h), interpolation=cv2.INTER_AREA)
+        return cv2.resize(frame, (INFERENCE_WIDTH, new_h),
+                          interpolation=cv2.INTER_AREA)
 
-    def _cursor(self, lms, w: int, h: int, t: float) -> tuple[int, int]:
+    def _cursor_for(self, label, lms, w, h, t):
+        if label not in self._filters:
+            self._filters[label] = (OneEuroFilter(), OneEuroFilter())
+        fx, fy = self._filters[label]
         idx = lms.landmark[self._mp.HandLandmark.INDEX_FINGER_TIP]
-        fx = self._fx(idx.x, t)
-        fy = self._fy(idx.y, t)
-        x = int(max(0.0, min(1.0, fx)) * (w - 1))
-        y = int(max(0.0, min(1.0, fy)) * (h - 1))
+        x = int(max(0.0, min(1.0, fx(idx.x, t))) * (w - 1))
+        y = int(max(0.0, min(1.0, fy(idx.y, t))) * (h - 1))
         return x, y
 
     def _pinch_ratio(self, lms) -> float | None:
@@ -159,10 +203,12 @@ class HandTracker:
         size = math.hypot(wrist.x - middle.x, wrist.y - middle.y)
         return None if size <= 1e-5 else pinch / size
 
-    def _smoothed_pinch(self, ratio: float | None) -> float | None:
+    def _smoothed_pinch_for(self, label, ratio):
         if ratio is None:
-            self._pinch_ema = None
+            self._pinch_emas.pop(label, None)
             return None
         a = PINCH_RATIO_SMOOTHING
-        self._pinch_ema = ratio if self._pinch_ema is None else a * ratio + (1 - a) * self._pinch_ema
-        return self._pinch_ema
+        prev = self._pinch_emas.get(label)
+        new = ratio if prev is None else a * ratio + (1 - a) * prev
+        self._pinch_emas[label] = new
+        return new
