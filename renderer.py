@@ -6,41 +6,37 @@ import numpy as np
 from config import COLORS, HAND_SPEED_METER_MAX
 
 
-def draw_game(frame, game, fps, hand):
+def draw_game(frame, game, fps, hand, debug=False, intro_seconds_left=0):
     height, width = frame.shape[:2]
+
+    if debug:
+        _draw_playfield(frame, game)
 
     hovered = game.hovered_shape()
     held = game.held_shape()
 
-    _panel(frame, (0, 0), (width, 96), 0.45)
-
     snapped, total = game.progress()
     title = (
-        f"Level {game.level_number}/{game.total_levels}: {game.level_name} | "
-        f"{snapped}/{total} matched | Moves: {game.moves} | Time: {game.elapsed_seconds()}s"
+        f"L{game.level_number}/{game.total_levels} "
+        f"{game.level_name}   "
+        f"{snapped}/{total}   "
+        f"{game.moves} moves   "
+        f"{game.elapsed_seconds()}s"
     )
-
-    _text(frame, title, (20, 42), scale=0.65)
+    _text(frame, title, (16, 34), scale=0.6)
 
     _text(
         frame,
-        f"FPS: {fps:.0f}",
-        (width - 120, 42),
-        scale=0.62,
+        f"{fps:.0f} fps",
+        (width - 96, 34),
+        scale=0.55,
         color=COLORS["success"] if fps >= 24 else COLORS["yellow"],
     )
-
-    _draw_speed_meter(frame, game.hand_speed, x=20, y=68)
-
-    _text(frame, "Drag shapes", (28, 125), scale=0.55)
-    _text(frame, "Drop targets", (width - 170, 125), scale=0.55)
 
     for target in game.targets:
         is_target = held is not None and target.id == held.target_id
         _draw_shape(
-            frame,
-            target,
-            game.shape_size,
+            frame, target, game.shape_size,
             outline=True,
             target_ring=is_target,
             snap_distance=game.snap_distance,
@@ -48,9 +44,7 @@ def draw_game(frame, game, fps, hand):
 
     for shape in game.shapes:
         _draw_shape(
-            frame,
-            shape,
-            game.shape_size,
+            frame, shape, game.shape_size,
             outline=False,
             hovered=(hovered is not None and hovered.id == shape.id),
             snap_distance=game.snap_distance,
@@ -58,26 +52,31 @@ def draw_game(frame, game, fps, hand):
 
     _draw_cursor(frame, game.cursor, game.is_pinching)
 
-    _panel(frame, (0, height - 58), (width, height), 0.5)
+    if intro_seconds_left > 0:
+        alpha = min(1.0, intro_seconds_left / 2.0)
+        hint = "Pinch thumb + index to grab. Release on the matching target."
+        _fading_text(frame, hint, (width // 2, height - 40), scale=0.6, alpha=alpha)
 
-    instruction = "Pinch: grab/drop | R: restart level | N: next after win | Q: quit"
-    _text(frame, instruction, (20, height - 22), scale=0.58)
-
-    status = "Hand detected" if hand.detected else "Show your hand to the camera"
-
-    if hand.pinch_ratio is not None:
-        status += f" | Pinch: {hand.pinch_ratio:.2f}"
-
-    _text(
-        frame,
-        status,
-        (width - 390, height - 22),
-        scale=0.55,
-        color=COLORS["success"] if hand.detected else COLORS["yellow"],
-    )
+    if debug:
+        _draw_speed_meter(frame, game.hand_speed, x=16, y=58)
+        _draw_pinch_meter(frame, hand, x=width - 260, y=58)
+        status = "hand ok" if hand.detected else "no hand"
+        _text(
+            frame, status,
+            (width - 130, height - 18),
+            scale=0.5,
+            color=COLORS["success"] if hand.detected else COLORS["yellow"],
+        )
+        keys = "R reset  N next  H hud  D landmarks  Q quit"
+        _text(frame, keys, (16, height - 18), scale=0.5)
 
     if game.won:
         _win_overlay(frame, game)
+
+
+def _draw_playfield(frame, game):
+    left, top, right, bottom = game.playfield()
+    cv2.rectangle(frame, (left, top), (right, bottom), COLORS["playfield"], 1, cv2.LINE_AA)
 
 
 def _draw_shape(frame, shape, size, outline=False, hovered=False, target_ring=False, snap_distance=60):
@@ -99,148 +98,98 @@ def _draw_shape(frame, shape, size, outline=False, hovered=False, target_ring=Fa
         _filled_shape(frame, shape.kind, x + 4, y + 4, size, (20, 20, 20))
 
     _filled_shape(frame, shape.kind, x, y, size, color)
-
-    cv2.circle(frame, (x - 14, y - 14), 7, COLORS["white"], -1, cv2.LINE_AA)
+    cv2.circle(frame, (x - 14, y - 14), 6, COLORS["white"], -1, cv2.LINE_AA)
 
 
 def _filled_shape(frame, kind, x, y, size, color):
     half = size // 2
-
     if kind == "square":
-        cv2.rectangle(
-            frame,
-            (x - half, y - half),
-            (x + half, y + half),
-            color,
-            -1,
-            cv2.LINE_AA,
-        )
-
+        cv2.rectangle(frame, (x - half, y - half), (x + half, y + half), color, -1, cv2.LINE_AA)
     elif kind == "circle":
         cv2.circle(frame, (x, y), half, color, -1, cv2.LINE_AA)
-
     else:
         cv2.fillPoly(frame, [_points(kind, x, y, size)], color, lineType=cv2.LINE_AA)
 
 
 def _outline_shape(frame, kind, x, y, size, color):
     half = size // 2
-
     if kind == "square":
-        cv2.rectangle(
-            frame,
-            (x - half, y - half),
-            (x + half, y + half),
-            color,
-            3,
-            cv2.LINE_AA,
-        )
-
+        cv2.rectangle(frame, (x - half, y - half), (x + half, y + half), color, 3, cv2.LINE_AA)
     elif kind == "circle":
         cv2.circle(frame, (x, y), half, color, 3, cv2.LINE_AA)
-
     else:
         cv2.polylines(frame, [_points(kind, x, y, size)], True, color, 3, cv2.LINE_AA)
 
 
 def _points(kind, x, y, size):
     half = size // 2
-
     if kind == "triangle":
         return np.array(
-            [
-                (x, y - half),
-                (x + half, y + half),
-                (x - half, y + half),
-            ],
+            [(x, y - half), (x + half, y + half), (x - half, y + half)],
             np.int32,
         )
-
     if kind == "diamond":
         return np.array(
-            [
-                (x, y - half),
-                (x + half, y),
-                (x, y + half),
-                (x - half, y),
-            ],
+            [(x, y - half), (x + half, y), (x, y + half), (x - half, y)],
             np.int32,
         )
-
-    # Pentagon
     points = []
     radius = half
-
     for i in range(5):
         angle = -math.pi / 2 + i * 2 * math.pi / 5
         px = int(x + math.cos(angle) * radius)
         py = int(y + math.sin(angle) * radius)
         points.append((px, py))
-
     return np.array(points, np.int32)
 
 
 def _draw_cursor(frame, pos, grabbing):
     color = COLORS["cursor_grab"] if grabbing else COLORS["cursor_idle"]
-    radius = 20 if grabbing else 15
-
+    radius = 18 if grabbing else 13
     cv2.circle(frame, pos, radius, color, -1, cv2.LINE_AA)
     cv2.circle(frame, pos, radius, COLORS["white"], 2, cv2.LINE_AA)
 
 
 def _draw_speed_meter(frame, speed, x, y):
-    width = 260
-    height = 16
-
+    width, height = 220, 12
     ratio = min(speed / HAND_SPEED_METER_MAX, 1.0)
     filled = int(width * ratio)
 
     if ratio < 0.35:
         color = COLORS["success"]
-        label = "steady"
     elif ratio < 0.7:
         color = COLORS["yellow"]
-        label = "moving"
     else:
         color = COLORS["danger"]
-        label = "fast"
 
-    cv2.rectangle(
-        frame,
-        (x, y),
-        (x + width, y + height),
-        COLORS["panel"],
-        -1,
-        cv2.LINE_AA,
-    )
-
-    cv2.rectangle(
-        frame,
-        (x, y),
-        (x + filled, y + height),
-        color,
-        -1,
-        cv2.LINE_AA,
-    )
-
-    cv2.rectangle(
-        frame,
-        (x, y),
-        (x + width, y + height),
-        COLORS["white"],
-        1,
-        cv2.LINE_AA,
-    )
+    cv2.rectangle(frame, (x, y), (x + width, y + height), COLORS["panel"], -1)
+    cv2.rectangle(frame, (x, y), (x + filled, y + height), color, -1)
+    cv2.rectangle(frame, (x, y), (x + width, y + height), COLORS["white"], 1)
 
     cv2.putText(
-        frame,
-        f"Hand speed: {int(speed)} px/s ({label})",
-        (x + width + 14, y + height - 2),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
-        COLORS["white"],
-        1,
-        cv2.LINE_AA,
+        frame, f"speed {int(speed)}",
+        (x + width + 10, y + height),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLORS["white"], 1, cv2.LINE_AA,
+    )
+
+
+def _draw_pinch_meter(frame, hand, x, y):
+    width, height = 140, 12
+    ratio = hand.pinch_ratio if hand.pinch_ratio is not None else 1.0
+    ratio = min(max(ratio, 0.0), 1.0)
+    filled = int(width * (1.0 - ratio))
+
+    color = COLORS["cursor_grab"] if hand.detected and ratio < 0.4 else COLORS["yellow"]
+
+    cv2.rectangle(frame, (x, y), (x + width, y + height), COLORS["panel"], -1)
+    cv2.rectangle(frame, (x, y), (x + filled, y + height), color, -1)
+    cv2.rectangle(frame, (x, y), (x + width, y + height), COLORS["white"], 1)
+
+    label = f"pinch {ratio:.2f}" if hand.pinch_ratio is not None else "pinch -"
+    cv2.putText(
+        frame, label,
+        (x + width + 10, y + height),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.45, COLORS["white"], 1, cv2.LINE_AA,
     )
 
 
@@ -249,70 +198,72 @@ def _win_overlay(frame, game):
 
     overlay = frame.copy()
     cv2.rectangle(overlay, (0, 0), (width, height), COLORS["black"], -1)
-    cv2.addWeighted(overlay, 0.68, frame, 0.32, 0, frame)
+    cv2.addWeighted(overlay, 0.6, frame, 0.4, 0, frame)
 
     if game.is_final_level:
-        title = "GAME COMPLETE!"
-        next_text = "Press N to restart from Level 1 or Q to quit"
+        title = "GAME COMPLETE"
+        next_text = "N: restart from L1   Q: quit"
     else:
-        title = "LEVEL CLEAR!"
-        next_text = "Press N for next level or R to replay"
+        title = "LEVEL CLEAR"
+        next_text = "N: next   R: replay"
 
     cv2.putText(
-        frame,
-        title,
-        (width // 2 - 250, height // 2 - 40),
-        cv2.FONT_HERSHEY_TRIPLEX,
-        1.8,
-        COLORS["success"],
-        3,
-        cv2.LINE_AA,
+        frame, title,
+        (width // 2 - 200, height // 2 - 30),
+        cv2.FONT_HERSHEY_TRIPLEX, 1.6, COLORS["success"], 3, cv2.LINE_AA,
     )
-
     cv2.putText(
         frame,
-        f"Level {game.level_number}/{game.total_levels} completed in {game.elapsed_seconds()}s with {game.moves} moves",
-        (width // 2 - 330, height // 2 + 25),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.85,
-        COLORS["white"],
-        2,
-        cv2.LINE_AA,
+        f"{game.elapsed_seconds()}s   {game.moves} moves",
+        (width // 2 - 130, height // 2 + 20),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.8, COLORS["white"], 2, cv2.LINE_AA,
     )
-
     cv2.putText(
-        frame,
-        next_text,
-        (width // 2 - 300, height // 2 + 75),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.75,
-        COLORS["yellow"],
-        2,
-        cv2.LINE_AA,
+        frame, next_text,
+        (width // 2 - 170, height // 2 + 60),
+        cv2.FONT_HERSHEY_SIMPLEX, 0.65, COLORS["yellow"], 2, cv2.LINE_AA,
     )
 
 
-def _panel(frame, top_left, bottom_right, alpha):
-    overlay = frame.copy()
-    cv2.rectangle(overlay, top_left, bottom_right, COLORS["black"], -1)
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-
-
-def _text(frame, text, pos, scale=0.65, color=COLORS["white"]):
+def _text(frame, text, pos, scale=0.6, color=COLORS["white"]):
     x, y = pos
     font = cv2.FONT_HERSHEY_SIMPLEX
-    thickness = 2
-    padding = 8
+    thickness = 1 if scale < 0.55 else 2
+    padding = 6
 
     size, baseline = cv2.getTextSize(text, font, scale, thickness)
     text_w, text_h = size
 
+    overlay = frame.copy()
     cv2.rectangle(
-        frame,
+        overlay,
         (x - padding, y - text_h - padding),
         (x + text_w + padding, y + baseline + padding),
-        COLORS["panel"],
+        COLORS["black"],
         -1,
     )
+    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+    cv2.putText(frame, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
 
+
+def _fading_text(frame, text, center, scale=0.6, alpha=1.0):
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    thickness = 2
+
+    size, _ = cv2.getTextSize(text, font, scale, thickness)
+    text_w, text_h = size
+    x = center[0] - text_w // 2
+    y = center[1]
+    padding = 8
+
+    overlay = frame.copy()
+    cv2.rectangle(
+        overlay,
+        (x - padding, y - text_h - padding),
+        (x + text_w + padding, y + padding),
+        COLORS["black"], -1,
+    )
+    cv2.addWeighted(overlay, 0.45 * alpha, frame, 1 - 0.45 * alpha, 0, frame)
+
+    color = tuple(int(c * alpha) for c in COLORS["white"])
     cv2.putText(frame, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)

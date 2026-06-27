@@ -3,23 +3,35 @@ CAMERA_WIDTH = 1280
 CAMERA_HEIGHT = 720
 WINDOW_NAME = "Gesture Puzzle Game"
 
-# Lower = faster cursor, higher = smoother cursor.
-SMOOTHING = 0.78
+# ---------- Cursor smoothing ----------
+SMOOTHING = 0.65
+MIN_SMOOTHING = 0.25
+SMOOTHING_SPEED_SCALE = 250.0
 
-# Pinch sensitivity. Higher = easier grab, lower = stricter.
-PINCH_THRESHOLD = 0.34
+# ---------- Pinch hysteresis ----------
+PINCH_GRAB_THRESHOLD = 0.32
+PINCH_RELEASE_THRESHOLD = 0.46
 
-# Hand speed meter.
-# Speed is measured from smoothed cursor movement in pixels per second.
+# Frames without a detected hand before we drop a held shape.
+HAND_LOST_GRACE_FRAMES = 10
+
+# ---------- Hand speed meter ----------
 HAND_SPEED_METER_MAX = 1400
 
+# ---------- MediaPipe ----------
 MAX_HANDS = 1
-MIN_DETECTION_CONFIDENCE = 0.75
-MIN_TRACKING_CONFIDENCE = 0.75
+MIN_DETECTION_CONFIDENCE = 0.6
+MIN_TRACKING_CONFIDENCE = 0.5
 
-TARGET_TOP_MARGIN = 130
-TARGET_BOTTOM_MARGIN = 95
+# ---------- Playfield (fraction of frame) ----------
+PLAYFIELD_MARGIN_X = 0.13
+PLAYFIELD_MARGIN_TOP = 0.18
+PLAYFIELD_MARGIN_BOTTOM = 0.16
 
+# ---------- Snap fairness ----------
+SNAP_LENIENCE_PER_100PXS = 6
+
+# ---------- Colors ----------
 COLORS = {
     "red": (44, 44, 239),
     "blue": (246, 130, 59),
@@ -38,6 +50,7 @@ COLORS = {
     "cursor_grab": (0, 255, 90),
     "success": (80, 230, 90),
     "danger": (80, 80, 255),
+    "playfield": (90, 90, 110),
 }
 
 ALL_SHAPES = [

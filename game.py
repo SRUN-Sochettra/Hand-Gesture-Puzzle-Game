@@ -7,11 +7,17 @@ from config import (
     ALL_SHAPES,
     CAMERA_HEIGHT,
     CAMERA_WIDTH,
+    HAND_LOST_GRACE_FRAMES,
     LEVELS,
-    PINCH_THRESHOLD,
+    MIN_SMOOTHING,
+    PINCH_GRAB_THRESHOLD,
+    PINCH_RELEASE_THRESHOLD,
+    PLAYFIELD_MARGIN_BOTTOM,
+    PLAYFIELD_MARGIN_TOP,
+    PLAYFIELD_MARGIN_X,
     SMOOTHING,
-    TARGET_BOTTOM_MARGIN,
-    TARGET_TOP_MARGIN,
+    SMOOTHING_SPEED_SCALE,
+    SNAP_LENIENCE_PER_100PXS,
 )
 
 
@@ -32,10 +38,10 @@ def dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def smooth_point(current, target):
+def smooth_point(current, target, smoothing):
     return (
-        int(current[0] * SMOOTHING + target[0] * (1 - SMOOTHING)),
-        int(current[1] * SMOOTHING + target[1] * (1 - SMOOTHING)),
+        int(current[0] * smoothing + target[0] * (1 - smoothing)),
+        int(current[1] * smoothing + target[1] * (1 - smoothing)),
     )
 
 
@@ -54,6 +60,7 @@ class GesturePuzzleGame:
         self.held_id: int | None = None
         self.is_pinching = False
         self.was_pinching = False
+        self.frames_without_hand = 0
 
         self.moves = 0
         self.started_at = time.time()
@@ -64,6 +71,7 @@ class GesturePuzzleGame:
 
         self.reset_level()
 
+    # ---------- level / state ----------
     @property
     def level(self):
         return LEVELS[self.level_index]
@@ -100,6 +108,14 @@ class GesturePuzzleGame:
     def won(self):
         return all(shape.snapped for shape in self.shapes)
 
+    def playfield(self):
+        """(left, top, right, bottom) safe rect in pixel coords."""
+        left = int(self.width * PLAYFIELD_MARGIN_X)
+        right = int(self.width * (1.0 - PLAYFIELD_MARGIN_X))
+        top = int(self.height * PLAYFIELD_MARGIN_TOP)
+        bottom = int(self.height * (1.0 - PLAYFIELD_MARGIN_BOTTOM))
+        return left, top, right, bottom
+
     def reset_level(self):
         self.shapes.clear()
         self.targets.clear()
@@ -110,6 +126,7 @@ class GesturePuzzleGame:
         self.held_id = None
         self.is_pinching = False
         self.was_pinching = False
+        self.frames_without_hand = 0
 
         self.moves = 0
         self.started_at = time.time()
@@ -134,6 +151,7 @@ class GesturePuzzleGame:
         self.height = height
         self.reset_level()
 
+    # ---------- main update ----------
     def update(self, hand):
         now = time.time()
         dt = min(now - self.last_update, 0.05)
@@ -143,25 +161,47 @@ class GesturePuzzleGame:
             self._move_targets(dt)
             self._sync_snapped_shapes_with_targets()
 
+        # Hand lost: keep held_id during a short grace period so motion blur
+        # doesn't drop a real drag, but pinch state must NEVER persist across
+        # a loss event — that's how you get phantom grabs when the hand
+        # reappears.
         if not hand.detected:
-            self.held_id = None
-            self.is_pinching = False
-            self.was_pinching = False
+            self.frames_without_hand += 1
             self.hand_speed *= 0.9
+
+            self.is_pinching = False
+
+            if self.frames_without_hand > HAND_LOST_GRACE_FRAMES:
+                self.held_id = None
+                self.was_pinching = False
+
             return
 
+        self.frames_without_hand = 0
         self.raw_cursor = hand.cursor
 
+        # Adaptive smoothing.
+        raw_delta = dist(self.cursor, self.raw_cursor)
+        relax = min(1.0, raw_delta / SMOOTHING_SPEED_SCALE)
+        smoothing = SMOOTHING * (1.0 - relax) + MIN_SMOOTHING * relax
+
         old_cursor = self.cursor
-        self.cursor = smooth_point(self.cursor, self.raw_cursor)
+        self.cursor = smooth_point(self.cursor, self.raw_cursor, smoothing)
 
         cursor_delta = dist(old_cursor, self.cursor)
-
         if dt > 0:
             instant_speed = cursor_delta / dt
             self.hand_speed = self.hand_speed * 0.75 + instant_speed * 0.25
 
-        self.is_pinching = hand.pinch_ratio < PINCH_THRESHOLD
+        # Pinch with hysteresis. Guard against a missing ratio (partial
+        # detection) — never carry a stale "True" forward in that case.
+        ratio = hand.pinch_ratio
+        if ratio is None:
+            self.is_pinching = False
+        elif self.is_pinching:
+            self.is_pinching = ratio < PINCH_RELEASE_THRESHOLD
+        else:
+            self.is_pinching = ratio < PINCH_GRAB_THRESHOLD
 
         just_grabbed = self.is_pinching and not self.was_pinching
         just_released = not self.is_pinching and self.was_pinching
@@ -174,7 +214,7 @@ class GesturePuzzleGame:
         held = self.held_shape()
 
         if held and not self.won:
-            held.x, held.y = self.cursor
+            held.x, held.y = self._clamp_to_playfield(self.cursor)
 
         if just_released and held:
             self.moves += 1
@@ -183,6 +223,7 @@ class GesturePuzzleGame:
 
         self.was_pinching = self.is_pinching
 
+    # ---------- helpers ----------
     def elapsed_seconds(self):
         end = self.finished_at if self.finished_at else time.time()
         return int(end - self.started_at)
@@ -193,8 +234,7 @@ class GesturePuzzleGame:
     def held_shape(self):
         if self.held_id is None:
             return None
-
-        return next((shape for shape in self.shapes if shape.id == self.held_id), None)
+        return next((s for s in self.shapes if s.id == self.held_id), None)
 
     def hovered_shape(self):
         if self.won:
@@ -216,12 +256,21 @@ class GesturePuzzleGame:
         return nearest
 
     def target_for(self, shape):
-        return next(target for target in self.targets if target.id == shape.target_id)
+        return next(t for t in self.targets if t.id == shape.target_id)
+
+    def _clamp_to_playfield(self, point):
+        left, top, right, bottom = self.playfield()
+        half = self.shape_size // 2
+        x = min(max(point[0], left + half), right - half)
+        y = min(max(point[1], top + half), bottom - half)
+        return x, y
 
     def _try_snap(self, shape):
         target = self.target_for(shape)
+        target_speed = math.hypot(target.vx, target.vy)
+        lenience = (target_speed / 100.0) * SNAP_LENIENCE_PER_100PXS
 
-        if dist((shape.x, shape.y), (target.x, target.y)) <= self.snap_distance:
+        if dist((shape.x, shape.y), (target.x, target.y)) <= self.snap_distance + lenience:
             shape.x = target.x
             shape.y = target.y
             shape.snapped = True
@@ -233,11 +282,14 @@ class GesturePuzzleGame:
         if not self.level["targets_move"]:
             return
 
-        top_limit = TARGET_TOP_MARGIN
-        bottom_limit = self.height - TARGET_BOTTOM_MARGIN
+        left, top, right, bottom = self.playfield()
+        half = self.shape_size // 2
 
-        left_limit = self.width - 310
-        right_limit = self.width - self.shape_size
+        band_width = min(280, (right - left) // 2)
+        right_limit = right - half - 4
+        top_limit = top + half + 4
+        bottom_limit = bottom - half - 4
+        left_limit = max(left + half + 4, right - band_width)
 
         for target in self.targets:
             target.x += target.vx * dt
@@ -246,7 +298,6 @@ class GesturePuzzleGame:
             if target.y <= top_limit:
                 target.y = top_limit
                 target.vy *= -1
-
             elif target.y >= bottom_limit:
                 target.y = bottom_limit
                 target.vy *= -1
@@ -254,7 +305,6 @@ class GesturePuzzleGame:
             if target.x <= left_limit:
                 target.x = left_limit
                 target.vx *= -1
-
             elif target.x >= right_limit:
                 target.x = right_limit
                 target.vx *= -1
@@ -263,32 +313,31 @@ class GesturePuzzleGame:
         for shape in self.shapes:
             if not shape.snapped:
                 continue
-
             target = self.target_for(shape)
             shape.x = target.x
             shape.y = target.y
 
+    # ---------- level setup ----------
     def _create_level(self):
         count = self.level["shape_count"]
         definitions = ALL_SHAPES[:count]
 
-        left_x = int(self.shape_size * 1.8)
-        right_x = int(self.width - self.shape_size * 1.8)
+        left, top, right, bottom = self.playfield()
+        half = self.shape_size // 2
 
-        top = TARGET_TOP_MARGIN
-        bottom = self.height - TARGET_BOTTOM_MARGIN
-        usable_height = max(1, bottom - top)
+        shape_x = left + half + 4
+        target_x = right - half - 4
 
-        spacing = min(140, max(82, usable_height // max(1, count - 1)))
+        usable_height = max(1, bottom - top - self.shape_size)
+        spacing = usable_height // max(1, count - 1) if count > 1 else 0
 
         target_slots = list(range(count))
         shape_slots = list(range(count))
-
         random.shuffle(target_slots)
         random.shuffle(shape_slots)
 
         for i, definition in enumerate(definitions):
-            target_y = top + spacing * target_slots[i]
+            target_y = top + half + spacing * target_slots[i]
             vx, vy = self._target_velocity()
 
             self.targets.append(
@@ -296,7 +345,7 @@ class GesturePuzzleGame:
                     id=i,
                     kind=definition["kind"],
                     color=definition["color"],
-                    x=right_x,
+                    x=target_x,
                     y=target_y,
                     vx=vx,
                     vy=vy,
@@ -304,14 +353,14 @@ class GesturePuzzleGame:
             )
 
         for i, definition in enumerate(definitions):
-            shape_y = top + spacing * shape_slots[i]
+            shape_y = top + half + spacing * shape_slots[i]
 
             self.shapes.append(
                 Shape(
                     id=i,
                     kind=definition["kind"],
                     color=definition["color"],
-                    x=left_x,
+                    x=shape_x,
                     y=shape_y,
                     target_id=i,
                 )

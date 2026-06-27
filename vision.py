@@ -10,6 +10,11 @@ from config import (
     MIN_TRACKING_CONFIDENCE,
 )
 
+INFERENCE_WIDTH = 480
+
+ACTIVE_AREA_X = 0.74
+ACTIVE_AREA_Y = 0.70
+
 
 @dataclass
 class HandResult:
@@ -26,15 +31,27 @@ class HandTracker:
 
         self.hands = self.mp_hands.Hands(
             max_num_hands=MAX_HANDS,
+            model_complexity=0,
             min_detection_confidence=MIN_DETECTION_CONFIDENCE,
             min_tracking_confidence=MIN_TRACKING_CONFIDENCE,
             static_image_mode=False,
         )
 
-    def process(self, frame, draw_landmarks=True) -> HandResult:
+    def process(self, frame, draw_landmarks=False) -> HandResult:
         height, width = frame.shape[:2]
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if width > INFERENCE_WIDTH:
+            inference_height = int(height * (INFERENCE_WIDTH / width))
+            small = cv2.resize(
+                frame,
+                (INFERENCE_WIDTH, inference_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        else:
+            small = frame
+
+        rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        rgb.flags.writeable = False
         results = self.hands.process(rgb)
 
         if not results.multi_hand_landmarks:
@@ -63,8 +80,20 @@ class HandTracker:
         thumb = lm[self.mp_hands.HandLandmark.THUMB_TIP]
         index = lm[self.mp_hands.HandLandmark.INDEX_FINGER_TIP]
 
-        x = int(((thumb.x + index.x) / 2) * width)
-        y = int(((thumb.y + index.y) / 2) * height)
+        nx = (thumb.x + index.x) / 2
+        ny = (thumb.y + index.y) / 2
+
+        margin_x = (1.0 - ACTIVE_AREA_X) / 2
+        margin_y = (1.0 - ACTIVE_AREA_Y) / 2
+
+        nx = (nx - margin_x) / ACTIVE_AREA_X
+        ny = (ny - margin_y) / ACTIVE_AREA_Y
+
+        nx = min(1.0, max(0.0, nx))
+        ny = min(1.0, max(0.0, ny))
+
+        x = int(nx * width)
+        y = int(ny * height)
 
         return max(0, min(width - 1, x)), max(0, min(height - 1, y))
 
@@ -80,7 +109,7 @@ class HandTracker:
         hand_size = math.hypot(wrist.x - middle_mcp.x, wrist.y - middle_mcp.y)
 
         if hand_size <= 0:
-            return 999.0
+            return None
 
         return pinch_distance / hand_size
 
