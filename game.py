@@ -1,26 +1,46 @@
+"""Game state, app state machine, event emission."""
+
+from __future__ import annotations
+
 import math
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum, auto
 
 from config import (
-    ALL_SHAPES,
-    CAMERA_HEIGHT,
-    CAMERA_WIDTH,
-    HAND_LOST_GRACE_FRAMES,
-    LEVELS,
-    MIN_SMOOTHING,
-    PINCH_GRAB_THRESHOLD,
-    PINCH_RELEASE_THRESHOLD,
-    PLAYFIELD_MARGIN_BOTTOM,
-    PLAYFIELD_MARGIN_TOP,
-    PLAYFIELD_MARGIN_X,
-    SMOOTHING,
-    SMOOTHING_SPEED_SCALE,
-    SNAP_LENIENCE_PER_100PXS,
+    ALL_SHAPES, CAMERA_HEIGHT, CAMERA_WIDTH, HAND_LOST_GRACE_SECONDS, LEVELS,
+    PINCH_GRAB_THRESHOLD, PINCH_RELEASE_THRESHOLD,
+    PLAYFIELD_MARGIN_BOTTOM, PLAYFIELD_MARGIN_TOP, PLAYFIELD_MARGIN_X,
+    SHAPE_GRAB_SCALE, SHAPE_HOVER_SCALE, SHAPE_SCALE_SPEED,
+    SNAP_LENIENCE_PER_100_PXS,
 )
+from effects import tween_toward
+from vision import HandFrame
 
 
+# ---------- enums ----------
+class GrabState(Enum):
+    IDLE = auto()
+    GRABBING = auto()
+
+
+class AppState(Enum):
+    READY = auto()           # waiting for hand to appear
+    PLAYING = auto()
+    PAUSED = auto()
+    LEVEL_COMPLETE = auto()  # win overlay, awaiting N
+    GAME_COMPLETE = auto()
+
+
+# ---------- events ----------
+@dataclass
+class Event:
+    kind: str  # "grab" | "release" | "snap" | "level_complete"
+    data: dict = field(default_factory=dict)
+
+
+# ---------- shapes & geometry ----------
 @dataclass
 class Shape:
     id: int
@@ -32,21 +52,25 @@ class Shape:
     snapped: bool = False
     vx: float = 0.0
     vy: float = 0.0
+    scale: float = 1.0  # animated cosmetic scale
 
 
-def dist(a, b):
-    return math.hypot(a[0] - b[0], a[1] - b[1])
+@dataclass
+class Rect:
+    left: int
+    top: int
+    right: int
+    bottom: int
+
+    @property
+    def width(self) -> int: return self.right - self.left
+    @property
+    def height(self) -> int: return self.bottom - self.top
 
 
-def smooth_point(current, target, smoothing):
-    return (
-        int(current[0] * smoothing + target[0] * (1 - smoothing)),
-        int(current[1] * smoothing + target[1] * (1 - smoothing)),
-    )
-
-
-class GesturePuzzleGame:
-    def __init__(self):
+# ---------- game ----------
+class GameState:
+    def __init__(self) -> None:
         self.width = CAMERA_WIDTH
         self.height = CAMERA_HEIGHT
         self.level_index = 0
@@ -54,335 +78,356 @@ class GesturePuzzleGame:
         self.shapes: list[Shape] = []
         self.targets: list[Shape] = []
 
-        self.cursor = (self.width // 2, self.height // 2)
-        self.raw_cursor = self.cursor
+        self.cursor: tuple[int, int] = (self.width // 2, self.height // 2)
+        self.cursor_scale: float = 1.0
+        self.hand_speed_pxs: float = 0.0
 
+        self.grab_state = GrabState.IDLE
         self.held_id: int | None = None
-        self.is_pinching = False
-        self.was_pinching = False
-        self.frames_without_hand = 0
+        self._hand_lost_at: float | None = None
 
+        self.app_state = AppState.READY
         self.moves = 0
-        self.started_at = time.time()
+        self.started_at: float | None = None
         self.finished_at: float | None = None
-        self.last_update = time.time()
+        self._last_update = time.time()
 
-        self.hand_speed = 0.0
+        self._events: list[Event] = []
 
-        self.reset_level()
+        self.reset_level(reset_app_state=True)
 
-    # ---------- level / state ----------
+    # ---- level metadata ----
     @property
-    def level(self):
-        return LEVELS[self.level_index]
-
+    def level(self) -> dict: return LEVELS[self.level_index]
     @property
-    def level_number(self):
-        return self.level_index + 1
-
+    def level_number(self) -> int: return self.level_index + 1
     @property
-    def total_levels(self):
-        return len(LEVELS)
-
+    def total_levels(self) -> int: return len(LEVELS)
     @property
-    def level_name(self):
-        return self.level["name"]
-
+    def level_name(self) -> str: return self.level["name"]
     @property
-    def shape_size(self):
-        return self.level["shape_size"]
-
+    def shape_size(self) -> int: return self.level["shape_size"]
     @property
-    def grab_distance(self):
-        return self.level["grab_distance"]
+    def grab_radius(self) -> int: return self.level["grab_radius"]
+    @property
+    def snap_radius(self) -> int: return self.level["snap_radius"]
+    @property
+    def is_final_level(self) -> bool: return self.level_index == len(LEVELS) - 1
+    @property
+    def is_pinching(self) -> bool: return self.grab_state is GrabState.GRABBING
+    @property
+    def is_paused(self) -> bool: return self.app_state is AppState.PAUSED
 
     @property
-    def snap_distance(self):
-        return self.level["snap_distance"]
+    def all_matched(self) -> bool:
+        return bool(self.shapes) and all(s.snapped for s in self.shapes)
 
-    @property
-    def is_final_level(self):
-        return self.level_index == len(LEVELS) - 1
+    def playfield(self) -> Rect:
+        return Rect(
+            left=int(self.width * PLAYFIELD_MARGIN_X),
+            top=int(self.height * PLAYFIELD_MARGIN_TOP),
+            right=int(self.width * (1.0 - PLAYFIELD_MARGIN_X)),
+            bottom=int(self.height * (1.0 - PLAYFIELD_MARGIN_BOTTOM)),
+        )
 
-    @property
-    def won(self):
-        return all(shape.snapped for shape in self.shapes)
+    # ---- events ----
+    def drain_events(self) -> list[Event]:
+        out = self._events
+        self._events = []
+        return out
 
-    def playfield(self):
-        """(left, top, right, bottom) safe rect in pixel coords."""
-        left = int(self.width * PLAYFIELD_MARGIN_X)
-        right = int(self.width * (1.0 - PLAYFIELD_MARGIN_X))
-        top = int(self.height * PLAYFIELD_MARGIN_TOP)
-        bottom = int(self.height * (1.0 - PLAYFIELD_MARGIN_BOTTOM))
-        return left, top, right, bottom
-
-    def reset_level(self):
+    # ---- lifecycle ----
+    def reset_level(self, *, reset_app_state: bool = False) -> None:
         self.shapes.clear()
         self.targets.clear()
-
         self.cursor = (self.width // 2, self.height // 2)
-        self.raw_cursor = self.cursor
-
+        self.hand_speed_pxs = 0.0
+        self.grab_state = GrabState.IDLE
         self.held_id = None
-        self.is_pinching = False
-        self.was_pinching = False
-        self.frames_without_hand = 0
-
+        self._hand_lost_at = None
         self.moves = 0
-        self.started_at = time.time()
+        self.started_at = None
         self.finished_at = None
-        self.last_update = time.time()
-        self.hand_speed = 0.0
+        self._last_update = time.time()
+        if reset_app_state:
+            self.app_state = AppState.READY
+        elif self.app_state in (AppState.LEVEL_COMPLETE, AppState.GAME_COMPLETE):
+            self.app_state = AppState.PLAYING
+            self.started_at = time.time()
+        self._spawn_level()
 
-        self._create_level()
-
-    def next_level(self):
-        if not self.won:
+    def next_level(self) -> None:
+        if self.app_state is AppState.GAME_COMPLETE:
+            self.level_index = 0
+            self.reset_level(reset_app_state=True)
             return
-
-        self.level_index = 0 if self.is_final_level else self.level_index + 1
+        if self.app_state is not AppState.LEVEL_COMPLETE:
+            return
+        self.level_index += 1
         self.reset_level()
 
-    def resize(self, width, height):
+    def toggle_pause(self) -> None:
+        if self.app_state is AppState.PLAYING:
+            self.app_state = AppState.PAUSED
+        elif self.app_state is AppState.PAUSED:
+            self.app_state = AppState.PLAYING
+
+    def resize(self, width: int, height: int) -> None:
         if width == self.width and height == self.height:
             return
+        # Rescale shape positions proportionally rather than nuking the level.
+        sx, sy = width / self.width, height / self.height
+        self.width, self.height = width, height
+        for s in self.shapes + self.targets:
+            s.x *= sx
+            s.y *= sy
 
-        self.width = width
-        self.height = height
-        self.reset_level()
-
-    # ---------- main update ----------
-    def update(self, hand):
+    # ---- main update ----
+    def update(self, hand: HandFrame) -> None:
         now = time.time()
-        dt = min(now - self.last_update, 0.05)
-        self.last_update = now
+        dt = min(now - self._last_update, 1 / 15)
+        self._last_update = now
 
-        if not self.won:
-            self._move_targets(dt)
-            self._sync_snapped_shapes_with_targets()
+        if self.app_state is AppState.READY:
+            self._update_ready(hand, now)
+        elif self.app_state is AppState.PLAYING:
+            self._update_playing(hand, dt, now)
+        elif self.app_state is AppState.PAUSED:
+            # Freeze world; still track cursor for visual continuity.
+            if hand.detected and hand.cursor:
+                self.cursor = hand.cursor
+        # LEVEL_COMPLETE / GAME_COMPLETE: cursor still updates for polish.
+        elif hand.detected and hand.cursor:
+            self.cursor = hand.cursor
 
-        # Hand lost: keep held_id during a short grace period so motion blur
-        # doesn't drop a real drag, but pinch state must NEVER persist across
-        # a loss event — that's how you get phantom grabs when the hand
-        # reappears.
+        self._animate(dt)
+
+    # ---- state-specific updates ----
+    def _update_ready(self, hand: HandFrame, now: float) -> None:
+        if hand.detected and hand.cursor:
+            self.cursor = hand.cursor
+            self.app_state = AppState.PLAYING
+            self.started_at = now
+            self._last_update = now
+
+    def _update_playing(self, hand: HandFrame, dt: float, now: float) -> None:
+        self._move_targets(dt)
+        self._sync_snapped_to_targets()
+
         if not hand.detected:
-            self.frames_without_hand += 1
-            self.hand_speed *= 0.9
-
-            self.is_pinching = False
-
-            if self.frames_without_hand > HAND_LOST_GRACE_FRAMES:
-                self.held_id = None
-                self.was_pinching = False
-
+            self._on_hand_lost(now)
             return
 
-        self.frames_without_hand = 0
-        self.raw_cursor = hand.cursor
+        self._on_hand_present(hand, dt)
 
-        # Adaptive smoothing.
-        raw_delta = dist(self.cursor, self.raw_cursor)
-        relax = min(1.0, raw_delta / SMOOTHING_SPEED_SCALE)
-        smoothing = SMOOTHING * (1.0 - relax) + MIN_SMOOTHING * relax
-
-        old_cursor = self.cursor
-        self.cursor = smooth_point(self.cursor, self.raw_cursor, smoothing)
-
-        cursor_delta = dist(old_cursor, self.cursor)
-        if dt > 0:
-            instant_speed = cursor_delta / dt
-            self.hand_speed = self.hand_speed * 0.75 + instant_speed * 0.25
-
-        # Pinch with hysteresis. Guard against a missing ratio (partial
-        # detection) — never carry a stale "True" forward in that case.
-        ratio = hand.pinch_ratio
-        if ratio is None:
-            self.is_pinching = False
-        elif self.is_pinching:
-            self.is_pinching = ratio < PINCH_RELEASE_THRESHOLD
-        else:
-            self.is_pinching = ratio < PINCH_GRAB_THRESHOLD
-
-        just_grabbed = self.is_pinching and not self.was_pinching
-        just_released = not self.is_pinching and self.was_pinching
-
-        if just_grabbed:
-            hovered = self.hovered_shape()
-            if hovered:
-                self.held_id = hovered.id
-
-        held = self.held_shape()
-
-        if held and not self.won:
-            held.x, held.y = self._clamp_to_playfield(self.cursor)
-
-        if just_released and held:
-            self.moves += 1
-            self._try_snap(held)
+    def _on_hand_lost(self, now: float) -> None:
+        if self._hand_lost_at is None:
+            self._hand_lost_at = now
+        self.grab_state = GrabState.IDLE
+        self.hand_speed_pxs *= 0.9
+        if now - self._hand_lost_at > HAND_LOST_GRACE_SECONDS:
             self.held_id = None
 
-        self.was_pinching = self.is_pinching
+    def _on_hand_present(self, hand: HandFrame, dt: float) -> None:
+        self._hand_lost_at = None
+        prev = self.cursor
+        self.cursor = hand.cursor or self.cursor
 
-    # ---------- helpers ----------
-    def elapsed_seconds(self):
-        end = self.finished_at if self.finished_at else time.time()
-        return int(end - self.started_at)
+        if dt > 0:
+            instant = math.hypot(self.cursor[0] - prev[0], self.cursor[1] - prev[1]) / dt
+            self.hand_speed_pxs = self.hand_speed_pxs * 0.75 + instant * 0.25
 
-    def progress(self):
-        return sum(shape.snapped for shape in self.shapes), len(self.shapes)
+        prev_state = self.grab_state
+        self._update_pinch_state(hand.pinch_ratio)
+        self._apply_pinch_transitions(prev_state)
 
-    def held_shape(self):
+    def _update_pinch_state(self, ratio: float | None) -> None:
+        if ratio is None:
+            self.grab_state = GrabState.IDLE
+            return
+        if self.grab_state is GrabState.GRABBING:
+            if ratio >= PINCH_RELEASE_THRESHOLD:
+                self.grab_state = GrabState.IDLE
+        elif ratio < PINCH_GRAB_THRESHOLD:
+            self.grab_state = GrabState.GRABBING
+
+    def _apply_pinch_transitions(self, prev_state: GrabState) -> None:
+        held = self.held_shape()
+
+        # --- enter GRABBING ---
+        if (prev_state is GrabState.IDLE
+                and self.grab_state is GrabState.GRABBING
+                and held is None):
+            hovered = self.hovered_shape()
+            if hovered is not None:
+                self.held_id = hovered.id
+                self._events.append(Event("grab", {"x": hovered.x, "y": hovered.y,
+                                                   "color": hovered.color}))
+
+        # --- continuous drag ---
+        held = self.held_shape()
+        if held is not None and self.grab_state is GrabState.GRABBING:
+            held.x, held.y = self._clamp_to_playfield(self.cursor)
+
+        # --- exit GRABBING ---
+        if (prev_state is GrabState.GRABBING
+                and self.grab_state is GrabState.IDLE
+                and held is not None):
+            self.moves += 1
+            snapped = self._try_snap(held)
+            if not snapped:
+                self._events.append(Event("release", {"x": held.x, "y": held.y,
+                                                      "color": held.color}))
+            self.held_id = None
+
+    # ---- queries ----
+    def held_shape(self) -> Shape | None:
         if self.held_id is None:
             return None
         return next((s for s in self.shapes if s.id == self.held_id), None)
 
-    def hovered_shape(self):
-        if self.won:
+    def hovered_shape(self) -> Shape | None:
+        if self.app_state is not AppState.PLAYING or self.held_id is not None:
             return None
-
-        nearest = None
-        nearest_distance = float("inf")
-
-        for shape in self.shapes:
-            if shape.snapped:
+        nearest: Shape | None = None
+        nd = float("inf")
+        for s in self.shapes:
+            if s.snapped:
                 continue
-
-            d = dist(self.cursor, (shape.x, shape.y))
-
-            if d < self.grab_distance and d < nearest_distance:
-                nearest = shape
-                nearest_distance = d
-
+            d = math.hypot(self.cursor[0] - s.x, self.cursor[1] - s.y)
+            if d < self.grab_radius and d < nd:
+                nearest, nd = s, d
         return nearest
 
-    def target_for(self, shape):
+    def target_for(self, shape: Shape) -> Shape:
         return next(t for t in self.targets if t.id == shape.target_id)
 
-    def _clamp_to_playfield(self, point):
-        left, top, right, bottom = self.playfield()
+    def progress(self) -> tuple[int, int]:
+        return sum(s.snapped for s in self.shapes), len(self.shapes)
+
+    def elapsed_seconds(self) -> int:
+        if self.started_at is None:
+            return 0
+        end = self.finished_at if self.finished_at else time.time()
+        return int(end - self.started_at)
+
+    def snap_proximity(self, shape: Shape) -> float:
+        """0..1 where 1 = within snap radius. Used for target ring pulse."""
+        target = self.target_for(shape)
+        d = math.hypot(shape.x - target.x, shape.y - target.y)
+        if d >= self.snap_radius * 2:
+            return 0.0
+        return max(0.0, min(1.0, 1.0 - d / (self.snap_radius * 2)))
+
+    # ---- helpers ----
+    def _clamp_to_playfield(self, point: tuple[int, int]) -> tuple[int, int]:
+        pf = self.playfield()
         half = self.shape_size // 2
-        x = min(max(point[0], left + half), right - half)
-        y = min(max(point[1], top + half), bottom - half)
+        x = min(max(point[0], pf.left + half), pf.right - half)
+        y = min(max(point[1], pf.top + half), pf.bottom - half)
         return x, y
 
-    def _try_snap(self, shape):
+    def _try_snap(self, shape: Shape) -> bool:
         target = self.target_for(shape)
         target_speed = math.hypot(target.vx, target.vy)
-        lenience = (target_speed / 100.0) * SNAP_LENIENCE_PER_100PXS
+        lenience = (target_speed / 100.0) * SNAP_LENIENCE_PER_100_PXS
+        d = math.hypot(shape.x - target.x, shape.y - target.y)
+        if d > self.snap_radius + lenience:
+            return False
+        shape.x, shape.y = target.x, target.y
+        shape.snapped = True
+        self._events.append(Event("snap", {"x": shape.x, "y": shape.y,
+                                           "color": shape.color}))
+        if self.all_matched and self.finished_at is None:
+            self.finished_at = time.time()
+            self.app_state = (AppState.GAME_COMPLETE
+                              if self.is_final_level else AppState.LEVEL_COMPLETE)
+            self._events.append(Event("level_complete", {"final": self.is_final_level}))
+        return True
 
-        if dist((shape.x, shape.y), (target.x, target.y)) <= self.snap_distance + lenience:
-            shape.x = target.x
-            shape.y = target.y
-            shape.snapped = True
-
-            if self.won and self.finished_at is None:
-                self.finished_at = time.time()
-
-    def _move_targets(self, dt):
+    def _move_targets(self, dt: float) -> None:
         if not self.level["targets_move"]:
             return
-
-        left, top, right, bottom = self.playfield()
+        pf = self.playfield()
         half = self.shape_size // 2
+        band = min(280, pf.width // 2)
+        left_l = max(pf.left + half, pf.right - band)
+        right_l = pf.right - half
+        top_l = pf.top + half
+        bot_l = pf.bottom - half
 
-        band_width = min(280, (right - left) // 2)
-        right_limit = right - half - 4
-        top_limit = top + half + 4
-        bottom_limit = bottom - half - 4
-        left_limit = max(left + half + 4, right - band_width)
+        for t in self.targets:
+            t.x += t.vx * dt
+            t.y += t.vy * dt
+            if t.y <= top_l: t.y, t.vy = top_l, -t.vy
+            elif t.y >= bot_l: t.y, t.vy = bot_l, -t.vy
+            if t.x <= left_l: t.x, t.vx = left_l, -t.vx
+            elif t.x >= right_l: t.x, t.vx = right_l, -t.vx
 
-        for target in self.targets:
-            target.x += target.vx * dt
-            target.y += target.vy * dt
-
-            if target.y <= top_limit:
-                target.y = top_limit
-                target.vy *= -1
-            elif target.y >= bottom_limit:
-                target.y = bottom_limit
-                target.vy *= -1
-
-            if target.x <= left_limit:
-                target.x = left_limit
-                target.vx *= -1
-            elif target.x >= right_limit:
-                target.x = right_limit
-                target.vx *= -1
-
-    def _sync_snapped_shapes_with_targets(self):
-        for shape in self.shapes:
-            if not shape.snapped:
+    def _sync_snapped_to_targets(self) -> None:
+        for s in self.shapes:
+            if not s.snapped:
                 continue
-            target = self.target_for(shape)
-            shape.x = target.x
-            shape.y = target.y
+            t = self.target_for(s)
+            s.x, s.y = t.x, t.y
 
-    # ---------- level setup ----------
-    def _create_level(self):
+    # ---- animation ----
+    def _animate(self, dt: float) -> None:
+        held = self.held_shape()
+        hovered = self.hovered_shape()
+
+        for s in self.shapes:
+            if s is held:
+                target_scale = SHAPE_GRAB_SCALE
+            elif s is hovered:
+                target_scale = SHAPE_HOVER_SCALE
+            else:
+                target_scale = 1.0
+            s.scale = tween_toward(s.scale, target_scale, SHAPE_SCALE_SPEED, dt)
+
+        target_cursor_scale = 1.15 if self.is_pinching else 1.0
+        from config import CURSOR_SCALE_SPEED
+        self.cursor_scale = tween_toward(self.cursor_scale, target_cursor_scale,
+                                         CURSOR_SCALE_SPEED, dt)
+
+    # ---- level spawn ----
+    def _spawn_level(self) -> None:
         count = self.level["shape_count"]
-        definitions = ALL_SHAPES[:count]
-
-        left, top, right, bottom = self.playfield()
+        defs = ALL_SHAPES[:count]
+        pf = self.playfield()
         half = self.shape_size // 2
+        shape_x = pf.left + half + 6
+        target_x = pf.right - half - 6
 
-        shape_x = left + half + 4
-        target_x = right - half - 4
-
-        usable_height = max(1, bottom - top - self.shape_size)
-        spacing = usable_height // max(1, count - 1) if count > 1 else 0
+        usable_h = max(1, pf.height - self.shape_size)
+        spacing = usable_h // max(1, count - 1) if count > 1 else 0
 
         target_slots = list(range(count))
         shape_slots = list(range(count))
         random.shuffle(target_slots)
         random.shuffle(shape_slots)
 
-        for i, definition in enumerate(definitions):
-            target_y = top + half + spacing * target_slots[i]
-            vx, vy = self._target_velocity()
+        for i, d in enumerate(defs):
+            vx, vy = self._random_velocity()
+            self.targets.append(Shape(
+                id=i, kind=d["kind"], color=d["color"],
+                x=target_x, y=pf.top + half + spacing * target_slots[i],
+                vx=vx, vy=vy,
+            ))
+        for i, d in enumerate(defs):
+            self.shapes.append(Shape(
+                id=i, kind=d["kind"], color=d["color"],
+                x=shape_x, y=pf.top + half + spacing * shape_slots[i],
+                target_id=i,
+            ))
 
-            self.targets.append(
-                Shape(
-                    id=i,
-                    kind=definition["kind"],
-                    color=definition["color"],
-                    x=target_x,
-                    y=target_y,
-                    vx=vx,
-                    vy=vy,
-                )
-            )
-
-        for i, definition in enumerate(definitions):
-            shape_y = top + half + spacing * shape_slots[i]
-
-            self.shapes.append(
-                Shape(
-                    id=i,
-                    kind=definition["kind"],
-                    color=definition["color"],
-                    x=shape_x,
-                    y=shape_y,
-                    target_id=i,
-                )
-            )
-
-    def _target_velocity(self):
+    def _random_velocity(self) -> tuple[float, float]:
         if not self.level["targets_move"]:
             return 0.0, 0.0
-
-        speed = random.randint(
-            self.level["target_speed_min"],
-            self.level["target_speed_max"],
-        )
-
+        lo, hi = self.level["speed_range"]
+        speed = random.randint(lo, hi)
+        sign = lambda: random.choice([-1, 1])
         axis = self.level["move_axis"]
-
-        if axis == "y":
-            return 0.0, speed * random.choice([-1, 1])
-
-        if axis == "xy":
-            vx = speed * 0.55 * random.choice([-1, 1])
-            vy = speed * random.choice([-1, 1])
-            return vx, vy
-
+        if axis == "y": return 0.0, speed * sign()
+        if axis == "xy": return speed * 0.55 * sign(), speed * sign()
         return 0.0, 0.0
