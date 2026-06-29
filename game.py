@@ -350,9 +350,9 @@ class GameState:
             slot._hand_lost_at = now
         slot.cursor_alpha = max(0.0,
                                 slot.cursor_alpha - dt / CURSOR_FADE_SECONDS)
-        slot.grab_state = GrabState.IDLE
         slot.hand_speed_pxs *= 0.9
         if now - slot._hand_lost_at > HAND_LOST_GRACE_SECONDS:
+            slot.grab_state = GrabState.IDLE
             if slot.held_id is not None:
                 s = next((sh for sh in self.shapes
                           if sh.id == slot.held_id), None)
@@ -411,8 +411,7 @@ class GameState:
             held.x, held.y = self._clamp_to_playfield(slot.cursor)
 
         # Exit GRABBING
-        if (prev_state is GrabState.GRABBING
-                and slot.grab_state is GrabState.IDLE
+        if (slot.grab_state is GrabState.IDLE
                 and held is not None):
             self.moves += 1
             snapped = self._try_snap(held)

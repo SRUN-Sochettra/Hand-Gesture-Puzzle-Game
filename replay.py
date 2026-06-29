@@ -43,8 +43,8 @@ class Playback:
     """Query ghost state at elapsed time. O(log n) lookup."""
 
     def __init__(self, samples: list[list]) -> None:
-        self.samples = samples
-        self._times = [s[0] for s in samples]
+        self.samples = [s for s in samples if isinstance(s, (list, tuple)) and len(s) >= 4]
+        self._times = [s[0] for s in self.samples]
 
     @property
     def empty(self) -> bool:
@@ -72,7 +72,8 @@ def load_all() -> dict[str, list[list]]:
     if not _PATH.exists():
         return {}
     try:
-        return json.loads(_PATH.read_text(encoding="utf-8"))
+        res = json.loads(_PATH.read_text(encoding="utf-8"))
+        return res if isinstance(res, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 

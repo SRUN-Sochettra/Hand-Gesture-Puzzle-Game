@@ -185,7 +185,7 @@ def main() -> None:
 
     try:
         while True:
-            frame_start = time.time()
+            frame_start = time.monotonic()
             ok, frame = cam.read()
             if not ok:
                 consecutive_failures += 1
@@ -200,7 +200,8 @@ def main() -> None:
             app.game.resize(w, h)
 
             hand = tracker.process(
-                frame, draw_landmarks=(app.debug and app.show_landmarks)
+                frame, draw_landmarks=(app.debug and app.show_landmarks),
+                pinch_threshold=app.game.pinch_grab_threshold,
             )
 
             # --- Calibration takes over ---
@@ -220,6 +221,7 @@ def main() -> None:
                     break
                 elif key == 32:
                     app.calibration.skip()
+                prev_t = time.monotonic()
                 continue
 
             # Apply calibration result once on completion
@@ -388,9 +390,13 @@ def main() -> None:
                 app.calibration.start()
             elif key == ord(","):
                 app.game.adjust_pinch_threshold(-1)
+                persistence.save_calibration(app.game.pinch_grab_threshold,
+                                             app.game.pinch_release_threshold)
                 app.show_settings()
             elif key == ord("."):
                 app.game.adjust_pinch_threshold(+1)
+                persistence.save_calibration(app.game.pinch_grab_threshold,
+                                             app.game.pinch_release_threshold)
                 app.show_settings()
             elif key in (ord("?"), ord("/")):
                 app.show_settings()
@@ -398,7 +404,7 @@ def main() -> None:
             if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                 break
 
-            slack = _FRAME_BUDGET - (time.time() - frame_start)
+            slack = _FRAME_BUDGET - (time.monotonic() - frame_start)
             if slack > 0.001:
                 time.sleep(slack)
     finally:

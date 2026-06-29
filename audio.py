@@ -43,5 +43,5 @@ def _play_seq(seq: list[tuple[int, int]]) -> None:
     for freq, dur in seq:
         try:
             winsound.Beep(freq, dur)
-        except RuntimeError:
+        except Exception:
             return

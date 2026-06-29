@@ -14,7 +14,8 @@ def load() -> dict:
     if not _PATH.exists():
         return {}
     try:
-        return json.loads(_PATH.read_text(encoding="utf-8"))
+        res = json.loads(_PATH.read_text(encoding="utf-8"))
+        return res if isinstance(res, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
 
@@ -47,7 +48,7 @@ def maybe_record(records: dict, level_name: str,
 def load_calibration() -> tuple[float, float] | None:
     data = load()
     cal = data.get(CALIBRATION_FILE_KEY)
-    if not cal or "grab" not in cal or "release" not in cal:
+    if not isinstance(cal, dict) or "grab" not in cal or "release" not in cal:
         return None
     return cal["grab"], cal["release"]
 

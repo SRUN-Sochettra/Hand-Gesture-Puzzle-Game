@@ -30,8 +30,9 @@ def _extended(lm, tip: int, pip: int, mcp: int) -> bool:
             > math.hypot(p.x - m.x, p.y - m.y) * GESTURE_EXTENSION_RATIO)
 
 
-def classify(landmarks, pinch_ratio: float | None) -> Gesture:
-    if pinch_ratio is not None and pinch_ratio < 0.34:
+def classify(landmarks, pinch_ratio: float | None,
+             pinch_threshold: float = 0.34) -> Gesture:
+    if pinch_ratio is not None and pinch_ratio < pinch_threshold:
         return Gesture.PINCH
     lm = landmarks.landmark
     ext = [_extended(lm, _TIP[i], _PIP[i], _MCP[i]) for i in range(5)]

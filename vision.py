@@ -130,9 +130,10 @@ class HandTracker:
         self._hands = self._build(n)
         self.reset_filter()
 
-    def process(self, frame, draw_landmarks: bool = False) -> HandFrame:
+    def process(self, frame, draw_landmarks: bool = False,
+                pinch_threshold: float = 0.34) -> HandFrame:
         h, w = frame.shape[:2]
-        t = time.time()
+        t = time.monotonic()
         small = self._downscale(frame, w, h)
         rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
         rgb.flags.writeable = False
@@ -155,7 +156,7 @@ class HandTracker:
                 )
             cursor = self._cursor_for(label, lms, w, h, t)
             ratio = self._smoothed_pinch_for(label, self._pinch_ratio(lms))
-            gesture = classify_gesture(lms, ratio)
+            gesture = classify_gesture(lms, ratio, pinch_threshold)
             hands_out.append(HandData(
                 handedness=label, cursor=cursor, pinch_ratio=ratio,
                 gesture=gesture, raw_landmarks=lms,
