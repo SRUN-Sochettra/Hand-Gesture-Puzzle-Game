@@ -11,13 +11,11 @@ from config import (
     PINCH_THRESHOLD_MAX, PINCH_THRESHOLD_MIN,
 )
 
-
 class CalibPhase(Enum):
     IDLE = auto()
     RELAXED = auto()
     PINCHED = auto()
     DONE = auto()
-
 
 @dataclass
 class Calibration:

@@ -4,7 +4,7 @@
 [![Python Version](https://img.shields.io/badge/Python-3.11-green.svg)](https://www.python.org/)
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.10.21-purple.svg)](https://google.github.io/mediapipe/)
 
-A webcam-based puzzle game controlled with real-time hand gestures. Use your hand to grab shapes, drag them across the screen, and drop them into matching moving targets.
+A webcam-based puzzle game controlled with real-time hand gestures. Grab shapes, drag them across the screen, and drop them into matching moving targets.
 
 Built with **Python**, **OpenCV**, and **MediaPipe Hands**.
 
@@ -12,41 +12,59 @@ Built with **Python**, **OpenCV**, and **MediaPipe Hands**.
 
 ## 🎮 Gameplay
 
-The goal is simple:
-
 1. **Show your hand** to the webcam.
 2. **Pinch** your thumb and index finger together to grab a shape.
 3. **Drag** the shape to the matching outline target.
 4. **Release** the pinch to drop it.
-5. Match all shapes to clear the level.
-
-Later levels become harder with faster and moving targets.
+5. **Hold Open Palm** for 1.2 seconds to pause or unpause the game.
+6. **Hold Pointing Finger** for 1.2 seconds to go to the next level when the level is completed.
 
 ---
 
 ## ✨ Features
 
-- **Real-time hand tracking** using webcam
-- **Pinch gesture detection** for intuitive grab/drop controls
-- **Smooth cursor movement** with customizable smoothing
-- **Shape matching puzzle** gameplay logic
-- **5 progressive levels** with increasing difficulty
-- **Moving targets** in advanced levels (vertical, horizontal, and diagonal motion)
-- **Hand speed meter** and live **FPS display**
-- **In-game controls** (Restart and Next-Level)
-- **Modular and clean** project file structure
+- **Real-Time Hand Tracking & Smoothing**: Uses MediaPipe Hands combined with a [OneEuroFilter](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/vision.py#L36) to ensure low-latency, jitter-free cursor movements.
+- **Intelligent Gesture Control**: In-game gestures (Pinch, Open Palm, Point, Fist) mapped to gameplay commands using [HoldFireDetector](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/gestures.py#L47).
+- **Interactive Pre-Game Calibration**: A two-phase calibration sequence (Relaxed vs. Pinched hand) to measure and configure custom pinch thresholds, which are saved across sessions.
+- **Ghost Replay**: Automatically records your best run's cursor path and pinch state, playing it back as a ghost cursor on retries so you can compete against your best time.
+- **Two-Player/Hand Co-op Mode**: Play with two hands (or two players) simultaneously, utilizing distinct cursor colors (Green for right hand, Blue for left hand).
+- **Selfie Segmentation Silhouette**: Uses MediaPipe Selfie Segmentation to render a glowing contour outline around the player's body and hand on the background.
+- **Pentatonic Audio Cues**: Tiny, non-blocking audio feedback (pitch-mapped shape snaps using pentatonic scales, grab/release ticks, and win fanfare). Windows-only (silent fallback elsewhere).
+- **Dynamic Visual Effects**: Screen shakes, custom particle bursts on snapping, confetti showers, and smooth cursor trails.
+- **Adaptive Difficulty**: Automatically slows down targets and increases grabbing/snapping tolerances if you restart or fail a level too many times.
+- **Gameplay Recording**: Real-time recording of the game window to an MP4 video file stored in the `recordings/` folder.
+- **Local Progress Persistence**: Auto-saves your level completion times and move counts locally to display high scores and best records.
 
 ---
 
 ## ⌨️ Controls
 
-| Action | Control |
+### Gestures (Hand Controls)
+| Gesture | Action | Description |
+|---|---|---|
+| **Pinch (Thumb + Index)** | Grab / Drag shape | Hold the pinch to drag a shape; release to drop it. |
+| **Open Palm** | Toggle Pause | Hold for 1.2 seconds during gameplay. |
+| **Point (Index Finger)** | Next Level | Hold for 1.2 seconds on the victory screen. |
+
+### Keyboard Hotkeys
+| Key | Action |
 |---|---|
-| **Grab shape** | Pinch thumb + index finger |
-| **Drop shape** | Release pinch |
-| **Restart current level** | Press `R` |
-| **Next level (after winning)** | Press `N` |
-| **Quit game** | Press `Q` |
+| **`Q`** or **`Esc`** | **Quit Game** |
+| **`R`** | **Restart Level** |
+| **`N`** | **Next Level** (on victory screen) |
+| **`P`** | **Toggle Pause** |
+| **`H`** | **Toggle Debug HUD** (displays FPS, One Euro values, speeds) |
+| **`D`** | **Toggle Hand Landmarks Drawing** |
+| **`S`** | **Toggle Silhouette Outline** (Selfie Segmentation) |
+| **`T`** | **Toggle Cursor Trail** |
+| **`G`** | **Toggle Ghost Best-Time Replay** |
+| **`2`** | **Toggle Two-Hand Co-op Mode** (restarts level with 2-hand tracking) |
+| **`V`** | **Toggle Gameplay Video Recording** (saves to `recordings/`) |
+| **`C`** | **Recalibrate Pinch Gesture** (Relaxed hand phase, then Pinched phase) |
+| **`Spacebar`** | **Skip active Pinch Calibration** |
+| **`,`** (comma) | **Lower Pinch Threshold** (makes grabbing tighter / stricter) |
+| **`.`** (period) | **Raise Pinch Threshold** (makes grabbing easier) |
+| **`?`** or **`/`** | **Show Settings Panel** |
 
 ---
 
@@ -54,31 +72,42 @@ Later levels become harder with faster and moving targets.
 
 | Level | Name | Description |
 |---|---|---|
-| 1 | Warm-up | 3 static targets |
-| 2 | Moving Targets | 3 vertically moving targets |
-| 3 | Four Shapes | 4 faster moving targets |
-| 4 | Crosswind | 4 targets moving vertically and horizontally |
-| 5 | Final Challenge | 5 smaller shapes with faster XY movement |
+| 1 | Warm-up | 3 static shape targets to match. |
+| 2 | Moving Targets | 3 targets moving vertically (`Y`-axis). |
+| 3 | Four Shapes | 4 targets moving vertically at higher speeds. |
+| 4 | Crosswind | 4 targets moving diagonally (`X` and `Y` axes). |
+| 5 | Final Challenge | 5 smaller targets with fast, chaotic diagonal movement. |
 
 ---
 
 ## 📁 Project Structure
 
-* [main.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/main.py) - Main game loop, webcam handling, and orchestration.
-* [config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py) - Game settings, colors, levels, and tuning values.
-* [game.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/game.py) - Game state, levels, snapping, and movement logic.
-* [vision.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/vision.py) - MediaPipe hand tracking and pinch detection.
-* [renderer.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/renderer.py) - Drawing UI, shapes, cursor, HUD, and text overlays.
-* [requirements.txt](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/requirements.txt) - Python dependencies.
+This project is modularly structured, dividing responsibilities across specialized scripts:
+
+- **[main.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/main.py)**: Orchestrates the main loop, processes camera feeds, handles key presses, and routes events.
+- **[config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py)**: Central configuration for colors, sizes, speeds, levels, keybindings, and physical tracking parameters.
+- **[game.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/game.py)**: Defines the core [GameState](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/game.py#L103) state machine, shape snapping, slot-based co-op, and target movement.
+- **[vision.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/vision.py)**: Wraps MediaPipe Hands, tracks coordinate cursors, and implements the noise-reducing [OneEuroFilter](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/vision.py#L36).
+- **[renderer.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/renderer.py)**: Pure rendering module containing functions like [draw](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/renderer.py#L28) to draw shapes, overlays, HUD, cards, and debug menus.
+- **[gestures.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/gestures.py)**: Classifies fingers and thumb to recognize Open Palm, Point, Fist, or Pinch gestures.
+- **[calibration.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/calibration.py)**: Manages the states and mathematics of the pre-game pinch/release threshold calibration.
+- **[effects.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/effects.py)**: Coordinates visual animations (tweens, particles, ripple rings, trails, and confetti bursts).
+- **[audio.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/audio.py)**: Handles non-blocking, multi-threaded audio cues on Windows using `winsound`.
+- **[motion.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/motion.py)**: Implements screen-shake tracking and decay.
+- **[persistence.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/persistence.py)**: Reads and writes best records and custom calibrations to `~/.gesture_puzzle_records.json`.
+- **[recording.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/recording.py)**: Captures game frames and writes them out to MP4 gameplay videos.
+- **[replay.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/replay.py)**: Manages recording and reading ghost paths stored in `~/.gesture_puzzle_ghosts.json`.
+- **[segmentation.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/segmentation.py)**: Processes and resizes selfies to create body silhouette masks.
+- **[requirements.txt](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/requirements.txt)**: Direct library dependencies.
 
 ---
 
 ## ⚙️ Requirements
 
 * **Python 3.11** (recommended)
-* **Webcam** (internal or external)
-* **Windows / macOS / Linux**
-* Good lighting for reliable hand tracking
+* **Webcam** (internal or external USB)
+* **Windows / macOS / Linux** (Audio feedback is currently supported on Windows only)
+* Good lighting for reliable hand landmark tracking
 
 ---
 
@@ -110,7 +139,7 @@ Later levels become harder with faster and moving targets.
 > opencv-python
 > numpy
 > ```
-> MediaPipe is pinned to `0.10.21` because this project uses the legacy `mp.solutions.hands` API.
+> MediaPipe is pinned to `0.10.21` because this project utilizes the legacy `mp.solutions.hands` API.
 
 ---
 
@@ -123,75 +152,34 @@ python main.py
 
 If your webcam does not open, check [config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py):
 ```python
-CAMERA_INDEX = 0
+CAMERA_INDEX = 1
 ```
-Try changing it to `1` or `2` if you have multiple cameras connected.
+Try changing it to `0`, `2`, etc., if you have multiple cameras connected or if the default index is incorrect.
 
 ---
 
 ## 🔧 Tuning Gameplay
 
-Most gameplay settings are inside [config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py).
+Most gameplay settings are located inside [config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py).
 
-### Adjust Pinch Sensitivity
+### Adjust Pinch Sensitivity manually
 ```python
-PINCH_THRESHOLD = 0.38  # Make pinch easier
-PINCH_THRESHOLD = 0.28  # Make pinch stricter
+PINCH_GRAB_THRESHOLD = 0.30     # Lower means you must pinch tighter to grab
+PINCH_RELEASE_THRESHOLD = 0.42  # Higher means you must open your hand wider to release
 ```
 
 ### Cursor Responsiveness & Smoothing
+Adjust the parameters for the One Euro Filter:
 ```python
-SMOOTHING = 0.70  # Make cursor faster/more responsive
-SMOOTHING = 0.85  # Make cursor smoother/less jittery
-```
-
-### Adjust Snapping Distance
-Increase `snap_distance` inside any level in `config.py` to make matching easier:
-```python
-"snap_distance": 75
+CURSOR_MIN_CUTOFF = 1.3  # Lower values decrease jitter but increase lag at low speeds
+CURSOR_BETA = 0.05       # Higher values reduce lag at high speeds
 ```
 
 ### Modify Target Speeds
-Change speeds inside the levels dictionary to adjust target velocity:
+Change speeds inside the `LEVELS` list to adjust target velocity:
 ```python
-"target_speed_min": 35,
-"target_speed_max": 75,
+"speed_range": (50, 85)
 ```
-
----
-
-## 🧠 How It Works
-
-1. **Landmark Extraction**: The game uses MediaPipe Hands to detect hand landmarks from the webcam input frame.
-2. **Cursor Calculation**: The cursor coordinate is mapped using the midpoint between the thumb tip and the index finger tip.
-3. **Pinch Detection**: A pinch is detected by measuring the Euclidean distance between the thumb and index finger tip, normalized by the overall hand size to ensure consistency regardless of distance from the camera.
-4. **Collision and Snapping**:
-   * Grabs a shape when the cursor collides with it while a pinch is active.
-   * Moves the held shape along with the cursor coordinates.
-   * Snaps the shape to a target outline if it matches and is within `snap_distance` when dropped.
-
----
-
-## ⚠️ Known Issues & Troubleshooting
-
-* **MediaPipe Warnings**: You may see TensorFlow Lite delegate logs or `absl::InitializeLog()` warnings in the terminal. These are normal and can be safely ignored.
-* **Jittery Hand Tracking**:
-  * Ensure your hand is well-lit and fully visible.
-  * Avoid busy backgrounds or bright lights directly behind you.
-  * Try tuning `MIN_DETECTION_CONFIDENCE` or `MIN_TRACKING_CONFIDENCE` in [config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py).
-* **Pinch Calibration**: Adjust `PINCH_THRESHOLD` in [config.py](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/config.py) (higher values make grabbing easier; lower values make it tighter).
-
----
-
-## 🔮 Future Improvements
-
-Some ideas for features you could implement:
-- [ ] Sound effects and background music
-- [ ] Scoring system and level-wise scoreboard
-- [ ] Countdown timer mode
-- [ ] Obstacles or moving hazards that deflect shapes
-- [ ] Level selection and pause menus
-- [ ] Two-handed puzzle mode
 
 ---
 
@@ -199,12 +187,12 @@ Some ideas for features you could implement:
 
 Contributions are welcome! Please review our guidelines:
 * **Guidelines**: See [CONTRIBUTING.md](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/CONTRIBUTING.md) for how to set up development and submit PRs.
-* **Code of Conduct**: Read [CODE_OF_CONDUCT.md](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/CODE_OF_CONDUCT.md) to learn about our community pledges and standards.
-* **Security Policy**: See [SECURITY.md](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/SECURITY.md) to report vulnerabilities.
+- **Code of Conduct**: Read [CODE_OF_CONDUCT.md](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/CODE_OF_CONDUCT.md) to learn about our community pledges and standards.
+- **Security Policy**: See [SECURITY.md](file:///d:/Users/ROG/Documents/School_Projects/Clones/hand-gesture-puzzle-game/SECURITY.md) to report vulnerabilities.
 
 ---
 
-## ✍️ Author
+## ✍️ Authors
 
 Created by **Srun Sochettra, Tep Makara & Sar Chanrithy** for final project of a subject in the course.
 
