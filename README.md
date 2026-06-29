@@ -194,7 +194,7 @@ Contributions are welcome! Please review our guidelines:
 
 ## ✍️ Authors
 
-Created by **Srun Sochettra, Tep Makara & Sar Chanrithy** for final project of a subject in the course.
+Created by **Srun Sochettra** for final project of a subject in the course.
 
 ---
 
