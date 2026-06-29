@@ -16,8 +16,7 @@ Built with **Python**, **OpenCV**, and **MediaPipe Hands**.
 2. **Pinch** your thumb and index finger together to grab a shape.
 3. **Drag** the shape to the matching outline target.
 4. **Release** the pinch to drop it.
-5. **Hold Open Palm** for 1.2 seconds to pause or unpause the game.
-6. **Hold Pointing Finger** for 1.2 seconds to go to the next level when the level is completed.
+5. **Hold Pointing Finger** for 1.2 seconds to go to the next level when the level is completed.
 
 ---
 
@@ -43,7 +42,6 @@ Built with **Python**, **OpenCV**, and **MediaPipe Hands**.
 | Gesture | Action | Description |
 |---|---|---|
 | **Pinch (Thumb + Index)** | Grab / Drag shape | Hold the pinch to drag a shape; release to drop it. |
-| **Open Palm** | Toggle Pause | Hold for 1.2 seconds during gameplay. |
 | **Point (Index Finger)** | Next Level | Hold for 1.2 seconds on the victory screen. |
 
 ### Keyboard Hotkeys
@@ -52,7 +50,6 @@ Built with **Python**, **OpenCV**, and **MediaPipe Hands**.
 | **`Q`** or **`Esc`** | **Quit Game** |
 | **`R`** | **Restart Level** |
 | **`N`** | **Next Level** (on victory screen) |
-| **`P`** | **Toggle Pause** |
 | **`H`** | **Toggle Debug HUD** (displays FPS, One Euro values, speeds) |
 | **`D`** | **Toggle Hand Landmarks Drawing** |
 | **`S`** | **Toggle Silhouette Outline** (Selfie Segmentation) |

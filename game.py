@@ -35,7 +35,6 @@ class GrabState(Enum):
 class AppState(Enum):
     READY = auto()
     PLAYING = auto()
-    PAUSED = auto()
     LEVEL_COMPLETE = auto()
     GAME_COMPLETE = auto()
 
@@ -170,9 +169,6 @@ class GameState:
         return any(s.grab_state is GrabState.GRABBING
                    for s in self.slots.values())
 
-    @property
-    def is_paused(self) -> bool:
-        return self.app_state is AppState.PAUSED
 
     @property
     def all_matched(self) -> bool:
@@ -261,11 +257,6 @@ class GameState:
         self.level_index += 1
         self.reset_level()
 
-    def toggle_pause(self) -> None:
-        if self.app_state is AppState.PLAYING:
-            self.app_state = AppState.PAUSED
-        elif self.app_state is AppState.PAUSED:
-            self.app_state = AppState.PLAYING
 
     def resize(self, width: int, height: int) -> None:
         if width == self.width and height == self.height:
@@ -288,11 +279,6 @@ class GameState:
             self._update_ready(hand, now, dt)
         elif self.app_state is AppState.PLAYING:
             self._update_playing(hand, dt, now)
-        elif self.app_state is AppState.PAUSED:
-            for slot in self.slots.values():
-                data = hand.by_handedness(slot.handedness)
-                if data and data.cursor:
-                    slot.cursor = data.cursor
         else:
             for slot in self.slots.values():
                 data = hand.by_handedness(slot.handedness)

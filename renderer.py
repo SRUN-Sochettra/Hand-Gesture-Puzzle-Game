@@ -111,8 +111,6 @@ def draw(
 
     if game.app_state is AppState.READY:
         _ready_overlay(frame, hand)
-    elif game.app_state is AppState.PAUSED:
-        _pause_overlay(frame)
     elif game.app_state in (AppState.LEVEL_COMPLETE, AppState.GAME_COMPLETE):
         _win_overlay(frame, game, best_record, is_new_best)
 
@@ -216,7 +214,7 @@ def _debug_overlay(frame, game: GameState, hand: HandFrame) -> None:
     _speed_bar(frame, game.hand_speed_pxs, x=16, y=104)
     primary = hand.primary
     _pinch_bar(frame, primary, x=w - 260, y=104)
-    _text(frame, "R reset · N next · P pause · H hud · D landmarks · "
+    _text(frame, "R reset · N next · H hud · D landmarks · "
                  "S sil · T trail · G ghost · 2 coop · V rec · C calib · Q quit",
           (16, h - 62), "caption", COLORS["text_muted"])
 
@@ -255,21 +253,6 @@ def _ready_overlay(frame, hand: HandFrame) -> None:
     _centered(frame, sub, h // 2 + 70, "body", sub_c)
 
 
-def _pause_overlay(frame) -> None:
-    h, w = frame.shape[:2]
-    _solid_overlay(frame, COLORS["bg_dim"], 0.65)
-
-    cx, cy = w // 2, h // 2 - 30
-    bar_w, bar_h, gap = 14, 64, 18
-    c = COLORS["text_primary"]
-    cv2.rectangle(frame, (cx - gap - bar_w, cy - bar_h // 2),
-                  (cx - gap, cy + bar_h // 2), c, -1, cv2.LINE_AA)
-    cv2.rectangle(frame, (cx + gap, cy - bar_h // 2),
-                  (cx + gap + bar_w, cy + bar_h // 2), c, -1, cv2.LINE_AA)
-
-    _centered(frame, "PAUSED", h // 2 + 60, "h3", COLORS["text_primary"])
-    _centered(frame, "P resume   ·   R restart   ·   Q quit",
-              h // 2 + 100, "caption", COLORS["text_muted"])
 
 
 def _win_overlay(frame, game: GameState,

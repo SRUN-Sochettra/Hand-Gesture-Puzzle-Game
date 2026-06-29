@@ -250,11 +250,7 @@ def main() -> None:
             else:
                 app.gestures.reset()
             if fired is not None:
-                if fired is Gesture.OPEN_PALM and app.game.app_state in (
-                    AppState.PLAYING, AppState.PAUSED,
-                ):
-                    app.game.toggle_pause()
-                elif fired is Gesture.POINT and app.game.app_state in (
+                if fired is Gesture.POINT and app.game.app_state in (
                     AppState.LEVEL_COMPLETE, AppState.GAME_COMPLETE,
                 ):
                     app.game.next_level()
@@ -357,8 +353,6 @@ def main() -> None:
                 app.is_new_best = False
                 app.recorder.reset()
                 app.reload_playback()
-            elif key == ord("p"):
-                app.game.toggle_pause()
             elif key == ord("h"):
                 app.debug = not app.debug
             elif key == ord("d"):
